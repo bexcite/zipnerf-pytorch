@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import sys
+import wandb
 
 import numpy as np
 import random
@@ -42,6 +43,10 @@ def main(unused_argv):
 
     # accelerator for DDP
     accelerator = accelerate.Accelerator()
+
+    # Initialize wandb
+    if accelerator.is_main_process:
+        wandb.init(project="zipnerf-pytorch-hm", config=config)
 
     # setup logger
     logging.basicConfig(
@@ -273,6 +278,23 @@ def main(unused_argv):
                     summ_fn('train_steps_per_sec', steps_per_sec)
                     summ_fn('train_rays_per_sec', rays_per_sec)
 
+                    # Log to wandb
+                    wandb.log({
+                        f'train_avg_{k}': v for k, v in avg_stats.items()
+                    }, step=step)
+                    wandb.log({
+                        f'train_max_{k}': v for k, v in max_stats.items()
+                    }, step=step)
+
+                    wandb.log({
+                        'train_num_params': num_params,
+                        'train_learning_rate': learning_rate,
+                        'train_steps_per_sec': steps_per_sec,
+                        'train_rays_per_sec': rays_per_sec,
+                        'train_avg_psnr_timed': avg_stats['psnr'],
+                    }, step=step)
+
+
                     summary_writer.add_scalar('train_avg_psnr_timed', avg_stats['psnr'],
                                               total_time // TIME_PRECISION)
                     summary_writer.add_scalar('train_avg_psnr_timed_approx', avg_stats['psnr'],
@@ -377,11 +399,22 @@ def main(unused_argv):
                     for k, v in vis_suite.items():
                         summary_writer.add_image('test_output_' + k, tb_process_fn(v), step)
 
+                    # Log metrics to wandb
+                    wandb.log({f'train_metrics/{name}': val for name, val in metric.items()}, step=step)
+
+                    # Log images to wandb
+                    for k, v in vis_suite.items():
+                        wandb.log({f'test_output_{k}': wandb.Image(v)}, step=step)
+
     if accelerator.is_main_process and config.max_steps > init_step:
         logger.info('Saving last checkpoint at step {} to {}'.format(step, config.checkpoint_dir))
         checkpoints.save_checkpoint(config.checkpoint_dir,
                                     accelerator, step,
                                     config.checkpoints_total_limit)
+
+    if accelerator.is_main_process:
+        wandb.finish()
+
     logger.info('Finish training.')
 
 
